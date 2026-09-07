@@ -1,7 +1,7 @@
 package llm;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import frist.ChatMessage;
+import first.ChatMessage;
 
 import java.net.URI;
 import java.net.http.HttpClient;

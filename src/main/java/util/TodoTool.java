@@ -44,7 +44,8 @@ public class TodoTool implements Tool {
     @Override
     public String execute(Map<String, Object> params) {
         String action = (String) params.get("action");
-        String userId = (String) params.getOrDefault("userId", "default");
+        // 从 AgentRuntime 注入的会话ID读取用户标识，实现多会话隔离
+        String userId = (String) params.getOrDefault("__sessionId", "default");
 
         if ("list".equals(action)) {
             return "你的待办清单：\n" + userTodos.getOrDefault(userId, "暂无待办");

@@ -1,5 +1,12 @@
 package runtime;
 
+import llm.LlmClient;
+import session.SessionManager;
+import util.CalculatorTool;
+import util.MockSearchTool;
+import util.TodoTool;
+import util.ToolRegistry;
+
 public class MinimalAgentDemo {
     public static void main(String[] args) throws Exception {
         // ========== 1. 初始化组件 ==========

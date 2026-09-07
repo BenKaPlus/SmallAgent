@@ -2,11 +2,12 @@ package runtime;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import frist.ChatMessage;
+import first.ChatMessage;
 import llm.LlmClient;
 import session.AgentSession;
 import session.SessionManager;
 import util.ToolRegistry;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -76,11 +77,15 @@ public class AgentRuntime {
                         new TypeReference<Map<String, Object>>() {}
                 );
 
+                // 注入当前会话ID，供需要会话隔离的工具使用（不暴露给 LLM 的 schema）
+                Map<String, Object> execParams = new HashMap<>(params);
+                execParams.put("__sessionId", sessionId);
+
                 // 执行工具
                 Tool tool = toolRegistry.getTool(toolName);
                 String result;
                 try {
-                    result = tool.execute(params);
+                    result = tool.execute(execParams);
                 } catch (Exception e) {
                     result = "工具执行异常：" + e.getMessage();
                     System.err.println("[Agent Error] 工具 " + toolName + " 执行失败：" + e.getMessage());

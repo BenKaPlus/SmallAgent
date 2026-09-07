@@ -1,6 +1,6 @@
 package session;
 
-import frist.ChatMessage;
+import first.ChatMessage;
 
 import java.util.ArrayList;
 import java.util.List;

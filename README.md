@@ -47,7 +47,7 @@ java -cp "target/classes;$(mvn -q dependency:build-classpath -Dmdep.outputFile=/
 mvn test
 ```
 
-预期输出：`Tests run: 15, Failures: 0`，覆盖 calculator / todo / session / runtime 循环上限。
+预期输出：`Tests run: 26, Failures: 0`，覆盖 calculator / todo / weather / session / runtime 循环上限（全部本地 stub，不消耗 API 额度）。
 
 ---
 
@@ -106,9 +106,10 @@ Step4 工具结果按原顺序写入 context（role=tool）
 
 | 工具 | 名称 | 能力 |
 |------|------|------|
-| 计算器 | `calculator` | 加减乘除、Math.pow 幂运算、sqrt 开方 |
+| 计算器 | `calculator` | 加减乘除、Math.pow 幂运算、sqrt 开方，带白名单注入防护 |
 | 搜索 | `web_search` | Mock 实现，返回模拟搜索结果 |
 | 待办 | `todo_manager` | add/list，按 `__sessionId` 隔离 |
+| 天气 | `weather_query` | **真实 API 查询**（t.weather.itboy.net），内置 18 城市名→ID 映射，返回当前温度+今明两天预报 |
 
 ### 4. LLM 客户端
 
@@ -249,6 +250,9 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 ## 八、提交历史
 
 ```
+[最新] feat: 新增真实天气查询工具（城市名→ID 映射 + 真实 API）
+340fb53 fix: 实现细节加固（脚本注入防护、null 兜底、封装、异常分类）
+6d7faf2 docs+test: 补全面试硬要求（README、JUnit 测试、思考过程解析、AI Prompt 记录）
 d2069a9 feat: 接入阿里云百炼并修复计算器死循环
 31aa1d3 feat: 健壮性增强（线程安全、超时重试、工具并行、截断修复）
 6f2c56b chore: 清理死代码与工程卫生

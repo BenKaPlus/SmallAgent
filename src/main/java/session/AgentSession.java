@@ -16,9 +16,9 @@ public class AgentSession {
     // 最大上下文消息数，超过则截断（基础压缩）
     private static final int MAX_CONTEXT_SIZE = 20;
     // 系统提示词
-    private static final String SYSTEM_PROMPT = 
+    private static final String SYSTEM_PROMPT =
             "你是一个智能助手，可以使用工具来解决问题。\n" +
-            "如果问题需要计算、搜索或管理待办，请调用对应的工具。\n" +
+            "如果问题需要计算、搜索、天气查询或管理待办，请调用对应的工具。\n" +
             "如果不需要工具，直接回答用户问题。";
 
     public AgentSession(String sessionId) {

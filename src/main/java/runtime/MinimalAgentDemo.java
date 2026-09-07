@@ -74,5 +74,11 @@ public class MinimalAgentDemo {
         agentRuntime.chat("session-window3", "搜索一下广州的天气");
         String followUp = agentRuntime.chat("session-window3", "那深圳呢？");
         System.out.println("追问回复：" + followUp);
+
+        System.out.println("\n===== 测试4：真实天气查询（含跨城市追问） =====");
+        String weather1 = agentRuntime.chat("session-window4", "深圳今天天气怎么样？");
+        System.out.println("首次回复：" + weather1);
+        String weather2 = agentRuntime.chat("session-window4", "那北京呢？");
+        System.out.println("追问回复：" + weather2);
     }
 }

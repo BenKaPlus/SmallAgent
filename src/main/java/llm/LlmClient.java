@@ -23,6 +23,9 @@ public class LlmClient {
     private final String model;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
+    // 非标准 OpenAI 参数，以顶层字段合并进请求体
+    // 例：百炼的 enable_thinking=false 可关闭 qwen3.8-max 的思考模式，避免 Agent 反复调工具不收敛
+    private Map<String, Object> extraBody;
 
     public LlmClient(String apiKey, String baseUrl, String model) {
         this.apiKey = apiKey;
@@ -32,6 +35,10 @@ public class LlmClient {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.objectMapper = new ObjectMapper();
+    }
+
+    public void setExtraBody(Map<String, Object> extraBody) {
+        this.extraBody = extraBody;
     }
 
     /**
@@ -54,6 +61,12 @@ public class LlmClient {
             requestBody = new HashMap<>(requestBody);
             requestBody.put("tools", tools);
             requestBody.put("tool_choice", "auto");
+        }
+
+        // 合并非标准参数（如百炼的 enable_thinking），原样以顶层字段发出
+        if (extraBody != null && !extraBody.isEmpty()) {
+            requestBody = new HashMap<>(requestBody);
+            requestBody.putAll(extraBody);
         }
 
         String requestJson = objectMapper.writeValueAsString(requestBody);

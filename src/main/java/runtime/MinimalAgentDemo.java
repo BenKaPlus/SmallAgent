@@ -6,20 +6,28 @@ import util.CalculatorTool;
 import util.MockSearchTool;
 import util.TodoTool;
 import util.ToolRegistry;
+import java.util.Map;
 
 public class MinimalAgentDemo {
     public static void main(String[] args) throws Exception {
         // ========== 1. 初始化组件 ==========
         // 从环境变量读取配置，避免把 API Key 硬编码进源码
-        // 使用前请设置：LLM_API_KEY（必填）、LLM_BASE_URL（默认 deepseek）、LLM_MODEL（默认 deepseek-chat）
-        String apiKey = System.getenv("LLM_API_KEY");
+        // 优先读阿里云百炼的 DASHSCOPE_API_KEY，回退到通用 LLM_API_KEY
+        // base_url 默认百炼华北2(北京) OpenAI 兼容入口；model 默认 qwen3.8-max
+        String apiKey = System.getenv("DASHSCOPE_API_KEY");
         if (apiKey == null || apiKey.isBlank()) {
-            System.err.println("请先设置环境变量 LLM_API_KEY 再运行本示例。");
+            apiKey = System.getenv("LLM_API_KEY");
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            System.err.println("请先设置环境变量 DASHSCOPE_API_KEY（或 LLM_API_KEY）再运行本示例。");
             return;
         }
-        String baseUrl = System.getenv().getOrDefault("LLM_BASE_URL", "https://api.deepseek.com/v1");
-        String model = System.getenv().getOrDefault("LLM_MODEL", "deepseek-chat");
+        String baseUrl = System.getenv().getOrDefault("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1");
+        String model = System.getenv().getOrDefault("LLM_MODEL", "qwen3.8-max");
         LlmClient llmClient = new LlmClient(apiKey, baseUrl, model);
+        // 关闭百炼 qwen3.8-max 默认的思考模式，避免 Agent 在工具已返回结果后仍反复调用工具不收敛
+        // 仅对百炼兼容入口生效，其他模型无此参数会被忽略
+        llmClient.setExtraBody(Map.of("enable_thinking", false));
 
         // 注册工具
         ToolRegistry toolRegistry = new ToolRegistry();

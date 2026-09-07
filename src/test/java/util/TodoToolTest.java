@@ -54,4 +54,11 @@ class TodoToolTest {
         java.util.List<String> required = (java.util.List<String>) schema.get("required");
         assertTrue(required.contains("action"));
     }
+
+    @Test
+    void shouldRejectEmptyContentOnAdd() {
+        // LLM 可能漏传 content，应友好返回错误而非写入 null
+        String result = tool.execute(Map.of("action", "add", "__sessionId", "x"));
+        assertTrue(result.contains("不能为空"), "空 content 应被拒绝，实际：" + result);
+    }
 }

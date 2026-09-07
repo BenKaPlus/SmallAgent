@@ -3,6 +3,7 @@ package session;
 import first.ChatMessage;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -42,8 +43,9 @@ public class AgentSession {
         }
     }
 
+    // 返回不可变视图，防止外部调用方修改内部 context 破坏一致性
     public List<ChatMessage> getContext() {
-        return context;
+        return Collections.unmodifiableList(context);
     }
 
     public String getSessionId() {

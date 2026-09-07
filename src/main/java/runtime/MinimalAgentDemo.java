@@ -1,5 +1,6 @@
 package runtime;
 
+import exception.AgentException;
 import llm.LlmClient;
 import session.SessionManager;
 import util.CalculatorTool;
@@ -9,7 +10,18 @@ import util.ToolRegistry;
 import java.util.Map;
 
 public class MinimalAgentDemo {
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try {
+            runDemo();
+        } catch (AgentException e) {
+            System.err.println("[Agent 异常] " + e.getMessage());
+            if (e.getCause() != null) {
+                e.getCause().printStackTrace();
+            }
+        }
+    }
+
+    private static void runDemo() {
         // ========== 1. 初始化组件 ==========
         // 从环境变量读取配置，避免把 API Key 硬编码进源码
         // 优先读阿里云百炼的 DASHSCOPE_API_KEY，回退到通用 LLM_API_KEY

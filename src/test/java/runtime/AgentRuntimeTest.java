@@ -48,7 +48,7 @@ class AgentRuntimeTest {
     }
 
     @Test
-    void shouldStopAtMaxLoopCountAndNotDeadlock() throws Exception {
+    void shouldStopAtMaxLoopCountAndNotDeadlock() {
         LlmClient stub = new StubLlmClient();
         ToolRegistry toolRegistry = new ToolRegistry();
         toolRegistry.registerTool(new MockSearchTool());

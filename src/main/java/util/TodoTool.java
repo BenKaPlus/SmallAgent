@@ -51,6 +51,9 @@ public class TodoTool implements Tool {
             return "你的待办清单：\n" + userTodos.getOrDefault(userId, "暂无待办");
         } else if ("add".equals(action)) {
             String content = (String) params.get("content");
+            if (content == null || content.isBlank()) {
+                return "添加失败：待办内容不能为空";
+            }
             String old = userTodos.getOrDefault(userId, "");
             userTodos.put(userId, old + "- " + content + "\n");
             return "已添加待办：" + content;

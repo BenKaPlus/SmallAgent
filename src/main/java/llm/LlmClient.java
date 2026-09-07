@@ -1,6 +1,7 @@
 package llm;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import exception.AgentException;
 import first.ChatMessage;
 
 import java.net.URI;
@@ -91,12 +92,15 @@ public class LlmClient {
                     continue;
                 }
                 if (code != 200) {
-                    throw new RuntimeException("LLM 调用失败，状态码：" + code + "，内容：" + response.body());
+                    throw new AgentException("LLM 调用失败，状态码：" + code + "，内容：" + response.body());
                 }
 
                 Map<String, Object> responseMap = objectMapper.readValue(response.body(), Map.class);
                 // 提取第一条选择的消息
                 List<Map<String, Object>> choices = (List<Map<String, Object>>) responseMap.get("choices");
+                if (choices == null || choices.isEmpty()) {
+                    throw new AgentException("LLM 返回的 choices 为空，原始响应：" + response.body());
+                }
                 return (Map<String, Object>) choices.get(0).get("message");
             } catch (java.io.IOException e) {
                 lastError = e;
@@ -107,6 +111,6 @@ public class LlmClient {
             }
             // InterruptedException 直接向上抛出，终止重试
         }
-        throw new RuntimeException("LLM 调用重试耗尽", lastError);
+        throw new AgentException("LLM 调用重试耗尽", lastError);
     }
 }

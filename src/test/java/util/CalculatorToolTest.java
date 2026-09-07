@@ -1,6 +1,7 @@
 package util;
 
 import org.junit.jupiter.api.Test;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -53,5 +54,23 @@ class CalculatorToolTest {
         @SuppressWarnings("unchecked")
         java.util.List<String> required = (java.util.List<String>) schema.get("required");
         assertTrue(required.contains("expression"));
+    }
+
+    @Test
+    void shouldBlockScriptInjectionAttempt() throws Exception {
+        // 模拟 LLM 被提示注入，试图执行任意 Java 代码
+        // 白名单字符过滤应拦截此类表达式
+        Map<String, Object> params = Map.of("expression", "java.lang.Runtime.getRuntime().exec('rm -rf /')");
+        String result = tool.execute(params);
+        assertTrue(result.startsWith("计算失败") && result.contains("非法字符"),
+                "脚本注入应被白名单拦截，实际：" + result);
+    }
+
+    @Test
+    void shouldRejectNullExpression() throws Exception {
+        Map<String, Object> params = new HashMap<>();
+        params.put("expression", null);
+        String result = tool.execute(params);
+        assertTrue(result.startsWith("计算失败"), "null 表达式应返回失败，实际：" + result);
     }
 }

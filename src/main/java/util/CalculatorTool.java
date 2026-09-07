@@ -5,6 +5,10 @@ import java.util.List;
 import java.util.Map;
 
 public class CalculatorTool implements Tool {
+    // 允许使用的安全函数/常量（白名单），其他字母组合一律拒绝，防止脚本注入
+    // 例：java.lang.Runtime.getRuntime().exec(...) 会被白名单拦截
+    private static final String[] ALLOWED_TOKENS = {"Math.pow", "Math.sqrt", "Math.PI", "Math.E", "sqrt"};
+
     @Override
     public String getName() {
         return "calculator";
@@ -34,7 +38,21 @@ public class CalculatorTool implements Tool {
     @Override
     public String execute(Map<String, Object> params) throws Exception {
         String expression = (String) params.get("expression");
-        // 用 Java 脚本引擎计算表达式。注意：JavaScript 中 ^ 是位异或，幂运算须用 Math.pow(a, b)
+        if (expression == null || expression.isBlank()) {
+            return "计算失败：表达式为空";
+        }
+
+        // 安全过滤：先把白名单函数名替换为占位符，剩余部分只允许数字和运算符
+        // 这样可以阻止 java.lang.Runtime 等危险调用
+        String safe = expression;
+        for (String token : ALLOWED_TOKENS) {
+            safe = safe.replace(token, "");
+        }
+        // 剩余字符只允许：数字、小数点、四则运算符、括号、逗号、空格
+        if (!safe.matches("^[0-9+\\-*/().\\s,]+$")) {
+            return "计算失败：表达式包含非法字符，仅支持数字、+-*/() 和 Math.pow/sqrt";
+        }
+
         try {
             javax.script.ScriptEngine engine = new javax.script.ScriptEngineManager().getEngineByName("js");
             if (engine == null) {

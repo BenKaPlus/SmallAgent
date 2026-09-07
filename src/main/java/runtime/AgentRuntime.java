@@ -62,6 +62,15 @@ public class AgentRuntime {
             String content = (String) llmResponse.get("content");
             List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) llmResponse.get("tool_calls");
 
+            // 提取思考过程（百炼 qwen3.8-max 思考模式开启时返回 reasoning_content 字段）
+            // 思考过程仅打印 trace 供观察，不写入 context，避免上下文膨胀且不干扰后续决策
+            Object reasoning = llmResponse.get("reasoning_content");
+            if (reasoning != null && !((String) reasoning).isBlank()) {
+                String r = (String) reasoning;
+                String preview = r.length() > 120 ? r.substring(0, 120) + "...(共" + r.length() + "字)" : r;
+                System.out.println("[Agent Trace] LLM 思考过程：" + preview);
+            }
+
             // 情况1：没有工具调用，直接返回结果，结束循环
             if (toolCalls == null || toolCalls.isEmpty()) {
                 session.addMessage(new ChatMessage("assistant", content));

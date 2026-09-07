@@ -7,11 +7,17 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class LlmClient {
+    // 最大重试次数（含首次）
+    private static final int MAX_RETRIES = 3;
+    // 重试退避基数（毫秒），实际等待 = 基数 * 当前尝试次数
+    private static final long RETRY_BACKOFF_MILLIS = 1000L;
+
     private final String apiKey;
     private final String baseUrl;
     private final String model;
@@ -22,7 +28,9 @@ public class LlmClient {
         this.apiKey = apiKey;
         this.baseUrl = baseUrl;
         this.model = model;
-        this.httpClient = HttpClient.newHttpClient();
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
         this.objectMapper = new ObjectMapper();
     }
 
@@ -54,18 +62,38 @@ public class LlmClient {
                 .uri(URI.create(baseUrl + "/chat/completions"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
+                .timeout(Duration.ofSeconds(60))
                 .POST(HttpRequest.BodyPublishers.ofString(requestJson))
                 .build();
 
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        
-        if (response.statusCode() != 200) {
-            throw new RuntimeException("LLM 调用失败，状态码：" + response.statusCode() + "，内容：" + response.body());
-        }
+        // 对网络异常与 429/5xx 做指数退避重试
+        Exception lastError = null;
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                int code = response.statusCode();
+                if ((code == 429 || code >= 500) && attempt < MAX_RETRIES) {
+                    System.err.println("[LLM Warn] 状态码 " + code + "，第 " + attempt + " 次重试...");
+                    Thread.sleep(RETRY_BACKOFF_MILLIS * attempt);
+                    continue;
+                }
+                if (code != 200) {
+                    throw new RuntimeException("LLM 调用失败，状态码：" + code + "，内容：" + response.body());
+                }
 
-        Map<String, Object> responseMap = objectMapper.readValue(response.body(), Map.class);
-        // 提取第一条选择的消息
-        List<Map<String, Object>> choices = (List<Map<String, Object>>) responseMap.get("choices");
-        return (Map<String, Object>) choices.get(0).get("message");
+                Map<String, Object> responseMap = objectMapper.readValue(response.body(), Map.class);
+                // 提取第一条选择的消息
+                List<Map<String, Object>> choices = (List<Map<String, Object>>) responseMap.get("choices");
+                return (Map<String, Object>) choices.get(0).get("message");
+            } catch (java.io.IOException e) {
+                lastError = e;
+                if (attempt < MAX_RETRIES) {
+                    System.err.println("[LLM Warn] 网络异常 " + e.getMessage() + "，第 " + attempt + " 次重试...");
+                    Thread.sleep(RETRY_BACKOFF_MILLIS * attempt);
+                }
+            }
+            // InterruptedException 直接向上抛出，终止重试
+        }
+        throw new RuntimeException("LLM 调用重试耗尽", lastError);
     }
 }

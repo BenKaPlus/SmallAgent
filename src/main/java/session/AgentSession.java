@@ -33,7 +33,9 @@ public class AgentSession {
         // 超过最大长度，保留系统提示 + 最近的消息
         if (context.size() > MAX_CONTEXT_SIZE) {
             ChatMessage system = context.get(0);
-            List<ChatMessage> recent = context.subList(context.size() - (MAX_CONTEXT_SIZE - 1), context.size());
+            // 注意：subList 返回的是视图，clear 后该视图也会失效，必须先拷贝再清理
+            int from = context.size() - (MAX_CONTEXT_SIZE - 1);
+            List<ChatMessage> recent = new ArrayList<>(context.subList(from, context.size()));
             context.clear();
             context.add(system);
             context.addAll(recent);

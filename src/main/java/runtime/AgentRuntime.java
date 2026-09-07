@@ -11,6 +11,7 @@ import util.ToolRegistry;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class AgentRuntime {
     private final LlmClient llmClient;
@@ -36,6 +37,14 @@ public class AgentRuntime {
     @SuppressWarnings("unchecked")
     public String chat(String sessionId, String userInput) throws Exception {
         AgentSession session = sessionManager.getOrCreateSession(sessionId);
+        // 同一会话串行执行，避免并发撕裂上下文
+        synchronized (session) {
+            return doChat(session, sessionId, userInput);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String doChat(AgentSession session, String sessionId, String userInput) throws Exception {
         // Step1：接收用户输入，加入上下文
         session.addMessage(new ChatMessage("user", userInput));
 
@@ -64,37 +73,15 @@ public class AgentRuntime {
             session.addMessage(new ChatMessage("assistant", content));
             System.out.println("[Agent Trace] LLM 决定调用工具，数量：" + toolCalls.size());
 
-            // Step3：依次执行所有工具调用
-            for (Map<String, Object> toolCall : toolCalls) {
-                String callId = (String) toolCall.get("id");
-                String toolName = (String) toolCall.get("function").get("name");
-                String argumentsStr = (String) toolCall.get("function").get("arguments");
+            // Step3：并行执行所有工具调用，结果按原顺序收集
+            List<ToolExecResult> execResults = toolCalls.parallelStream()
+                    .map(toolCall -> executeOneTool(toolCall, sessionId))
+                    .collect(Collectors.toList());
 
-                System.out.println("[Agent Trace] 调用工具：" + toolName + "，参数：" + argumentsStr);
-
-                // 解析工具参数
-                Map<String, Object> params = objectMapper.readValue(
-                        argumentsStr,
-                        new TypeReference<Map<String, Object>>() {}
-                );
-
-                // 注入当前会话ID，供需要会话隔离的工具使用（不暴露给 LLM 的 schema）
-                Map<String, Object> execParams = new HashMap<>(params);
-                execParams.put("__sessionId", sessionId);
-
-                // 执行工具
-                Tool tool = toolRegistry.getTool(toolName);
-                String result;
-                try {
-                    result = tool.execute(execParams);
-                } catch (Exception e) {
-                    result = "工具执行异常：" + e.getMessage();
-                    System.err.println("[Agent Error] 工具 " + toolName + " 执行失败：" + e.getMessage());
-                }
-
-                // Step4：工具结果加入上下文，继续循环
-                session.addMessage(new ChatMessage("tool", result, callId));
-                System.out.println("[Agent Trace] 工具执行结果：" + result);
+            // Step4：按顺序把工具结果加入上下文，继续循环
+            for (ToolExecResult r : execResults) {
+                session.addMessage(new ChatMessage("tool", r.result, r.callId));
+                System.out.println("[Agent Trace] 工具执行结果：" + r.result);
             }
 
             // 回到循环开头，把工具结果喂给 LLM，继续判断
@@ -102,5 +89,59 @@ public class AgentRuntime {
 
         // 超过最大循环次数，强制结束
         return "抱歉，处理步骤过多，未能得到最终结果，请换一种问法。";
+    }
+
+    /**
+     * 执行单个工具调用，异常被吞为结果字符串，不中断并行流
+     */
+    @SuppressWarnings("unchecked")
+    private ToolExecResult executeOneTool(Map<String, Object> toolCall, String sessionId) {
+        String callId = (String) toolCall.get("id");
+        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
+        String toolName = (String) function.get("name");
+        String argumentsStr = (String) function.get("arguments");
+
+        System.out.println("[Agent Trace] 调用工具：" + toolName + "，参数：" + argumentsStr);
+
+        // 解析工具参数
+        Map<String, Object> params;
+        try {
+            params = objectMapper.readValue(
+                    argumentsStr,
+                    new TypeReference<Map<String, Object>>() {}
+            );
+        } catch (Exception e) {
+            return new ToolExecResult(callId, toolName, "工具参数解析异常：" + e.getMessage());
+        }
+
+        // 注入当前会话ID，供需要会话隔离的工具使用（不暴露给 LLM 的 schema）
+        Map<String, Object> execParams = new HashMap<>(params);
+        execParams.put("__sessionId", sessionId);
+
+        // 执行工具
+        Tool tool = toolRegistry.getTool(toolName);
+        if (tool == null) {
+            return new ToolExecResult(callId, toolName, "未注册的工具：" + toolName);
+        }
+        try {
+            String result = tool.execute(execParams);
+            return new ToolExecResult(callId, toolName, result);
+        } catch (Exception e) {
+            System.err.println("[Agent Error] 工具 " + toolName + " 执行失败：" + e.getMessage());
+            return new ToolExecResult(callId, toolName, "工具执行异常：" + e.getMessage());
+        }
+    }
+
+    // 工具执行结果载体，便于并行收集后按顺序写回上下文
+    private static final class ToolExecResult {
+        final String callId;
+        final String toolName;
+        final String result;
+
+        ToolExecResult(String callId, String toolName, String result) {
+            this.callId = callId;
+            this.toolName = toolName;
+            this.result = result;
+        }
     }
 }

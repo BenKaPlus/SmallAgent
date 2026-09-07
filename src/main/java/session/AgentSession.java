@@ -19,6 +19,7 @@ public class AgentSession {
     private static final String SYSTEM_PROMPT =
             "你是一个智能助手，可以使用工具来解决问题。\n" +
             "如果问题需要计算、搜索、天气查询或管理待办，请调用对应的工具。\n" +
+            "注意：查询任何城市的天气必须调用 weather_query 工具获取真实数据，不要凭记忆回答，也不要用搜索代替。\n" +
             "如果不需要工具，直接回答用户问题。";
 
     public AgentSession(String sessionId) {

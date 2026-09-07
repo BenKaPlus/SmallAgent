@@ -7,6 +7,7 @@ import util.CalculatorTool;
 import util.MockSearchTool;
 import util.TodoTool;
 import util.ToolRegistry;
+import util.WeatherTool;
 import java.util.Map;
 
 public class MinimalAgentDemo {
@@ -46,6 +47,7 @@ public class MinimalAgentDemo {
         toolRegistry.registerTool(new CalculatorTool());
         toolRegistry.registerTool(new MockSearchTool());
         toolRegistry.registerTool(new TodoTool());
+        toolRegistry.registerTool(new WeatherTool());
 
         // 会话管理器
         SessionManager sessionManager = new SessionManager();

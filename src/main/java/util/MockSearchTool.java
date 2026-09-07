@@ -12,7 +12,7 @@ public class MockSearchTool implements Tool {
 
     @Override
     public String getDescription() {
-        return "网络搜索工具，用于查询实时信息、新闻、常识等未知知识";
+        return "网络搜索工具，用于查询新闻、常识、科普等通用信息。天气查询不要用本工具，请使用 weather_query";
     }
 
     @Override

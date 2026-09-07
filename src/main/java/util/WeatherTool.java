@@ -62,9 +62,9 @@ public class WeatherTool implements Tool {
 
     @Override
     public String getDescription() {
-        return "查询指定城市的真实天气（当前温度、今明两天预报）。当前支持18个城市："
-                + String.join("、", CITY_CODES.keySet())
-                + "。仅当用户询问以上城市的天气时使用本工具，其他城市请勿使用";
+        return "查询城市的真实天气（当前温度、湿度、空气质量、今明两天预报）。"
+                + "当用户询问天气、温度、是否下雨时，优先使用本工具而不是搜索。"
+                + "当前支持18个城市：" + String.join("、", CITY_CODES.keySet());
     }
 
     @Override

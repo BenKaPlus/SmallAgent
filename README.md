@@ -65,13 +65,15 @@ SmallAgent/
     ├── session/
     │   ├── AgentSession.java      单会话上下文 + 截断压缩
     │   └── SessionManager.java    多会话管理（ConcurrentHashMap）
+    ├── exception/AgentException.java  统一业务异常（非受检）
     ├── first/ChatMessage.java      消息模型
     └── util/
         ├── Tool.java              工具接口
         ├── ToolRegistry.java      工具注册 + Schema 生成
-        ├── CalculatorTool.java    计算器
+        ├── CalculatorTool.java    计算器（自研递归下降求值器）
         ├── MockSearchTool.java     模拟搜索
-        └── TodoTool.java          待办管理
+        ├── TodoTool.java          待办管理
+        └── WeatherTool.java       真实天气查询
 ```
 
 ### 2. Agent 主循环（ReAct）
@@ -102,11 +104,11 @@ Step4 工具结果按原顺序写入 context（role=tool）
 - **并行**：一次循环内多个 tool_calls 用 `parallelStream` 并行执行，结果按原顺序写回 context
 - **会话隔离**：AgentRuntime 调用工具时注入 `__sessionId`（不暴露给 LLM schema），TodoTool 据此实现按会话隔离待办
 
-已实现三个工具：
+已实现四个工具：
 
 | 工具 | 名称 | 能力 |
 |------|------|------|
-| 计算器 | `calculator` | 加减乘除、Math.pow 幂运算、sqrt 开方，带白名单注入防护 |
+| 计算器 | `calculator` | 加减乘除、Math.pow 幂运算、sqrt 开方；**自研递归下降求值器**，不依赖 Nashorn（JDK 15+ 兼容），白名单注入防护 |
 | 搜索 | `web_search` | Mock 实现，返回模拟搜索结果 |
 | 待办 | `todo_manager` | add/list，按 `__sessionId` 隔离 |
 | 天气 | `weather_query` | **真实 API 查询**（t.weather.itboy.net），内置 18 城市名→ID 映射，返回当前温度+今明两天预报 |
@@ -180,7 +182,8 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 ### 5. 追问能力验证
 
 - **纯对话追问**：测试3第二轮「那深圳呢？」——LLM 基于上一轮 context 理解"那"指代天气
-- **带工具的追问**：LLM 理解上下文后自动搜深圳，且并行调用了 2 个 `web_search`（不同关键词）
+- **带工具的追问**：LLM 理解上下文后自动换城市调用 `weather_query({"city":"深圳"})`，无需用户重复"天气"二字；测试4 继续追问北京，同样自动切换城市
+- **工具选择引导**：系统提示与工具描述双重引导（"天气必须用 weather_query"），实测 LLM 稳定选择真实天气工具而非 mock 搜索
 
 ---
 
@@ -189,7 +192,7 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 ### 1. 异常处理
 
 - **工具异常**：`executeOneTool` 捕获异常转为字符串结果，不中断循环
-- **LLM 异常**：429/5xx/IOException 重试，非重试范围抛 RuntimeException
+- **LLM 异常**：429/5xx/IOException 指数退避重试，非重试范围（401/400 等）或重试耗尽抛自定义 `AgentException`（非受检异常，语义明确）
 - **空 Key 保护**：`MinimalAgentDemo` 检测 `DASHSCOPE_API_KEY` 未设则提示并退出
 - **循环上限**：`MAX_LOOP_COUNT=10` 防止 LLM 反复调工具不收敛
 
@@ -199,7 +202,6 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 
 ```
 [Agent Trace] 第 1 次循环，调用 LLM...
-[Agent Trace] LLM 思考过程：用户问的是 1234*5678...(共128字)
 [Agent Trace] LLM 决定调用工具，数量：1
 [Agent Trace] 调用工具：calculator，参数：{"expression": "1234 * 5678"}
 [Agent Trace] 工具执行结果：计算结果：7006652
@@ -207,18 +209,23 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 [Agent Trace] LLM 直接回复，结束循环
 ```
 
+> 注：`LLM 思考过程：...` 一行仅在百炼返回 `reasoning_content` 时打印（思考模式开启时）；默认 `enable_thinking=false`，该行不出现。思考过程只打印不入 context。
+
 ---
 
 ## 五、测试用例
 
-`src/test/java/` 下 4 个测试类共 15 个用例：
+`src/test/java/` 下 5 个测试类共 26 个用例（全部本地 stub/mock，不消耗 API 额度）：
 
-| 测试类 | 覆盖点 |
-|--------|--------|
-| `CalculatorToolTest` | 基础运算、Math.pow 幂运算、非法表达式容错、schema 规范 |
-| `TodoToolTest` | **多会话隔离**（核心）、未注入 sessionId 回退、不支持操作拒绝 |
-| `AgentSessionTest` | system 初始化、消息追加、超限截断压缩、未触发截断 |
-| `AgentRuntimeTest` | **循环上限保护**——用 Stub LlmClient 模拟"永远调工具"，验证不死循环 |
+| 测试类 | 用例数 | 覆盖点 |
+|--------|--------|--------|
+| `CalculatorToolTest` | 7 | 基础运算、Math.pow 幂运算、非法表达式容错、**脚本注入拦截**、null 表达式、schema 规范 |
+| `TodoToolTest` | 6 | **多会话隔离**（核心）、未注入 sessionId 回退、不支持操作拒绝、content 空校验 |
+| `WeatherToolTest` | 8 | 城市名→ID 映射（含"市"后缀）、不支持城市拦截、JSON 解析、错误响应容错、schema |
+| `AgentSessionTest` | 4 | system 初始化、消息追加、超限截断压缩、未触发截断 |
+| `AgentRuntimeTest` | 1 | **循环上限保护**——用 Stub LlmClient 模拟"永远调工具"，验证不死循环 |
+
+> 为什么单测不接真实 LLM：LLM 输出不确定无法写稳定断言、慢、消耗 token；单测用 stub 保证逻辑确定性（还能精确构造"死循环"等真实 LLM 难复现的边界场景），真实 LLM 的工具选择与回答质量由 Demo 集成场景验收。
 
 ---
 
@@ -229,6 +236,7 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 | 框架 | 无 | 面试要求"从零实现"，仅用 JDK + Jackson |
 | HTTP | JDK HttpClient | Java 11 内置，无需额外依赖 |
 | JSON | Jackson | 业界标准，序列化 ChatMessage 需要 getter |
+| 表达式求值 | 自研递归下降解析器 | Nashorn（javax.script）JDK 11 弃用、15+ 移除，且 eval 字符串有注入面；自研约 130 行零依赖，JDK 全版本兼容 |
 | LLM | 阿里云百炼 qwen3.8-max | OpenAI 兼容，国内可访问 |
 | 测试 | JUnit 5 | 业界标准 |
 | 思考模式 | 默认关闭 | qwen3.8-max 默认开启会导致 Agent 反复调工具不收敛 |
@@ -250,14 +258,16 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 ## 八、提交历史
 
 ```
-[最新] feat: 新增真实天气查询工具（城市名→ID 映射 + 真实 API）
-340fb53 fix: 实现细节加固（脚本注入防护、null 兜底、封装、异常分类）
-6d7faf2 docs+test: 补全面试硬要求（README、JUnit 测试、思考过程解析、AI Prompt 记录）
-d2069a9 feat: 接入阿里云百炼并修复计算器死循环
-31aa1d3 feat: 健壮性增强（线程安全、超时重试、工具并行、截断修复）
-6f2c56b chore: 清理死代码与工程卫生
-e31f053 fix: 修复阻断运行的致命 Bug 并修正包名拼写
-5599086 尝试的demo版本
+[最新] 84cbc4b refactor: 计算器改用自研递归下降求值器，移除 Nashorn 依赖
+       41ed49a fix: 修复 Demo 未注册天气工具 + 工具描述与系统提示引导优化
+       84f2e3c feat: 新增真实天气查询工具（城市名→ID 映射 + 真实 API）
+       340fb53 fix: 实现细节加固（脚本注入防护、null 兜底、封装、异常分类）
+       6d7faf2 docs+test: 补全面试硬要求（README、JUnit 测试、思考过程解析、AI Prompt 记录）
+       d2069a9 feat: 接入阿里云百炼并修复计算器死循环
+       31aa1d3 feat: 健壮性增强（线程安全、超时重试、工具并行、截断修复）
+       6f2c56b chore: 清理死代码与工程卫生
+       e31f053 fix: 修复阻断运行的致命 Bug 并修正包名拼写
+       5599086 尝试的demo版本
 ```
 
 开发过程记录见 [docs/AI-PROMPTS.md](docs/AI-PROMPTS.md)。

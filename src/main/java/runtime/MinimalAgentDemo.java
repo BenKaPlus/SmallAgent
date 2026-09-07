@@ -10,12 +10,16 @@ import util.ToolRegistry;
 public class MinimalAgentDemo {
     public static void main(String[] args) throws Exception {
         // ========== 1. 初始化组件 ==========
-        // 配置 LLM 客户端（换成你自己的 API Key 和接口地址）
-        LlmClient llmClient = new LlmClient(
-                "你的API-KEY",
-                "https://api.deepseek.com/v1",
-                "deepseek-chat"
-        );
+        // 从环境变量读取配置，避免把 API Key 硬编码进源码
+        // 使用前请设置：LLM_API_KEY（必填）、LLM_BASE_URL（默认 deepseek）、LLM_MODEL（默认 deepseek-chat）
+        String apiKey = System.getenv("LLM_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            System.err.println("请先设置环境变量 LLM_API_KEY 再运行本示例。");
+            return;
+        }
+        String baseUrl = System.getenv().getOrDefault("LLM_BASE_URL", "https://api.deepseek.com/v1");
+        String model = System.getenv().getOrDefault("LLM_MODEL", "deepseek-chat");
+        LlmClient llmClient = new LlmClient(apiKey, baseUrl, model);
 
         // 注册工具
         ToolRegistry toolRegistry = new ToolRegistry();

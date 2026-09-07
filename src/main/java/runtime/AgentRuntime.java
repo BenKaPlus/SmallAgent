@@ -6,6 +6,7 @@ import first.ChatMessage;
 import llm.LlmClient;
 import session.AgentSession;
 import session.SessionManager;
+import util.Tool;
 import util.ToolRegistry;
 import java.util.HashMap;
 import java.util.List;

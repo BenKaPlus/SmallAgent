@@ -61,12 +61,15 @@ SmallAgent/
     ├── runtime/
     │   ├── AgentRuntime.java       Agent 主循环（核心）
     │   └── MinimalAgentDemo.java   演示入口
-    ├── llm/LlmClient.java          OpenAI 兼容 HTTP 客户端
+    ├── llm/
+    │   ├── LlmClient.java          OpenAI 兼容 HTTP 客户端
+    │   └── LlmSummarizer.java      基于 LLM 的上下文摘要器
     ├── session/
-    │   ├── AgentSession.java      单会话上下文 + 截断压缩
-    │   └── SessionManager.java    多会话管理（ConcurrentHashMap）
+    │   ├── AgentSession.java      单会话上下文 + 摘要压缩/硬截断
+    │   ├── SessionManager.java    多会话管理 + 空闲清理
+    │   └── ContextSummarizer.java 摘要器接口
     ├── exception/AgentException.java  统一业务异常（非受检）
-    ├── first/ChatMessage.java      消息模型
+    ├── first/ChatMessage.java      消息模型（按 OpenAI 协议建模 tool_calls/tool_call_id）
     └── util/
         ├── Tool.java              工具接口
         ├── ToolRegistry.java      工具注册 + Schema 生成
@@ -110,7 +113,7 @@ Step4 工具结果按原顺序写入 context（role=tool）
 |------|------|------|
 | 计算器 | `calculator` | 加减乘除、Math.pow 幂运算、sqrt 开方；**自研递归下降求值器**，不依赖 Nashorn（JDK 15+ 兼容），白名单注入防护 |
 | 搜索 | `web_search` | Mock 实现，返回模拟搜索结果 |
-| 待办 | `todo_manager` | add/list，按 `__sessionId` 隔离 |
+| 待办 | `todo_manager` | add/list/complete/delete/clear，结构化存储（id/content/done），按 `__sessionId` 隔离，**JSON 文件持久化**（重启不丢） |
 | 天气 | `weather_query` | **真实 API 查询**（t.weather.itboy.net），内置 18 城市名→ID 映射，返回当前温度+今明两天预报 |
 
 ### 4. LLM 客户端
@@ -126,6 +129,8 @@ Step4 工具结果按原顺序写入 context（role=tool）
 - `SessionManager` 用 `ConcurrentHashMap<sessionId, AgentSession>`，多窗口天然隔离
 - 同 sessionId 调 `chat()` 复用上下文，支持「接着窗口1继续聊」
 - `AgentRuntime.chat()` 对同一 session 加 `synchronized`，防止并发撕裂 context
+- 创建会话时注入 `ContextSummarizer`（摘要压缩）；可选开启守护线程**定时清理空闲会话**（默认空闲 30 分钟回收），避免内存无限增长
+- 会话记录 `lastActiveAt`，每次追加消息更新，作为清理判据
 
 ---
 
@@ -137,13 +142,15 @@ Step4 工具结果按原顺序写入 context（role=tool）
 
 ```
 [
-  {role: "system",    content: 系统提示}          ← 初始化时写入，永不丢失
-  {role: "user",     content: 用户输入}          ← Step1 写入
-  {role: "assistant",content: LLM 回复}          ← Step2 写入（含工具调用决策）
-  {role: "tool",     content: 工具结果, toolCallId} ← Step4 写入
+  {role: "system",    content: 系统提示}                        ← 初始化时写入，永不丢失
+  {role: "user",      content: 用户输入}                        ← Step1 写入
+  {role: "assistant", content: "", tool_calls: [{id, function}]} ← Step2 写入，保留工具调用决策
+  {role: "tool",      content: 工具结果, tool_call_id: 调用ID}   ← Step4 写入，靠 tool_call_id 配对
   ...
 ]
 ```
+
+> **协议正确性**：assistant 发起工具调用时必须把 `tool_calls` 原样存回上下文，tool 结果必须用蛇形字段 `tool_call_id` 关联——否则下一轮发给 LLM 的消息序列非法（曾出现只存 content、字段名写成驼峰 `toolCallId` 的问题，靠供应商容错才没报错）。空字段通过 `@JsonInclude(NON_NULL)` 不序列化。
 
 ### 2. 召回时机
 
@@ -165,19 +172,21 @@ chat() → doChat() → llmClient.chatCompletion(session.getContext(), ...) → 
 
 ### 4. Context 压缩策略
 
-`AgentSession.MAX_CONTEXT_SIZE = 20`，超出后**保留 system + 最近 19 条**：
+`AgentSession.MAX_CONTEXT_SIZE = 20`，超出后触发压缩，分两级：
+
+- **摘要压缩（默认，注入了 `LlmSummarizer`）**：保留 `system` + 最近 8 条原样，较早消息交给 LLM 压成一条 `【历史对话摘要】` system 消息。摘要失败（网络/限流）自动**回退为硬截断**，不影响主流程。
+- **硬截断（未配置摘要器，如单元测试）**：保留 `system` + 最近 19 条。
+
+**配对保护（两种压缩都做）**：压缩后若保留窗口的开头是一条 `tool` 消息，而它对应的带 `tool_calls` 的 assistant 已被移除，这条 tool 结果就是"孤儿"（`tool_call_id` 悬空），必须一并丢弃，否则下一轮发给 LLM 的序列非法。
 
 ```java
-if (context.size() > MAX_CONTEXT_SIZE) {
-    ChatMessage system = context.get(0);
-    List<ChatMessage> recent = new ArrayList<>(context.subList(from, context.size()));
-    context.clear();
-    context.add(system);
-    context.addAll(recent);
+// 丢弃窗口开头悬空的 tool 消息
+while (!msgs.isEmpty() && "tool".equals(msgs.get(0).getRole())) {
+    msgs.remove(0);
 }
 ```
 
-**关键 bug 修复**：`subList` 返回的是原列表的视图，`clear()` 后视图失效。必须先用 `new ArrayList<>(subList)` 拷贝再清理，否则会导致旧消息被清空只剩 system。
+> 另外 `subList` 返回原列表视图，`clear()` 前必须用 `new ArrayList<>(subList)` 拷贝，否则旧消息会被清空只剩 system。
 
 ### 5. 追问能力验证
 
@@ -215,14 +224,16 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 
 ## 五、测试用例
 
-`src/test/java/` 下 5 个测试类共 26 个用例（全部本地 stub/mock，不消耗 API 额度）：
+`src/test/java/` 下 7 个测试类共 38 个用例（全部本地 stub/mock，不消耗 API 额度）：
 
 | 测试类 | 用例数 | 覆盖点 |
 |--------|--------|--------|
+| `ChatMessageProtocolTest` | 3 | **OpenAI 协议序列化**：tool_calls / tool_call_id 字段名正确、空字段不输出 |
 | `CalculatorToolTest` | 7 | 基础运算、Math.pow 幂运算、非法表达式容错、**脚本注入拦截**、null 表达式、schema 规范 |
-| `TodoToolTest` | 6 | **多会话隔离**（核心）、未注入 sessionId 回退、不支持操作拒绝、content 空校验 |
+| `TodoToolTest` | 10 | **多会话隔离**、标记完成、删除、缺 id 拒绝、content 空校验、**跨实例文件持久化** |
 | `WeatherToolTest` | 8 | 城市名→ID 映射（含"市"后缀）、不支持城市拦截、JSON 解析、错误响应容错、schema |
-| `AgentSessionTest` | 4 | system 初始化、消息追加、超限截断压缩、未触发截断 |
+| `AgentSessionTest` | 6 | system 初始化、消息追加、硬截断、**截断时丢弃悬空 tool 消息**、**摘要压缩** |
+| `SessionManagerTest` | 3 | **空闲会话清理**、活跃会话保留、摘要器透传 |
 | `AgentRuntimeTest` | 1 | **循环上限保护**——用 Stub LlmClient 模拟"永远调工具"，验证不死循环 |
 
 > 为什么单测不接真实 LLM：LLM 输出不确定无法写稳定断言、慢、消耗 token；单测用 stub 保证逻辑确定性（还能精确构造"死循环"等真实 LLM 难复现的边界场景），真实 LLM 的工具选择与回答质量由 Demo 集成场景验收。
@@ -246,8 +257,8 @@ if (context.size() > MAX_CONTEXT_SIZE) {
 ## 七、已知限制
 
 - 搜索工具是 Mock 实现，未接真实搜索 API
-- 待办仅内存存储，进程退出即丢失
-- Context 压缩是简单截断，无摘要
+- 待办持久化为本地 JSON 文件（单文件、无并发写优化），非数据库
+- 摘要压缩每次触发会多一次 LLM 调用（有 token 成本与延迟）；无 token 计数，仍按消息条数触发
 - 无流式输出（SSE）
 - 无 RAG / 长期记忆 / 多 Agent 协作
 

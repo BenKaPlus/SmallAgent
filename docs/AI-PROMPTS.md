@@ -219,6 +219,43 @@ context.addAll(recent);
 
 ---
 
+### 问题10：消息模型没按 OpenAI 协议建模，Function Call 历史是非法序列
+
+**现象（面试官 Code Review 指出）**：
+1. TodoTool 待办存在内存 `ConcurrentHashMap` 里、value 是字符串拼接，进程一退全丢
+2. Context 只有硬截断，没有摘要
+3. 只把 content 存进 context，assistant 的原始 tool_calls 丢了
+
+**排查与证实**：顺着第 3 点读代码，发现 `ChatMessage` 模型根本没有 tool_calls 字段，[AgentRuntime] 存 assistant 消息时只传了 content。用 jshell 实测 Jackson 序列化发给 LLM 的消息：
+
+```json
+[
+  {"role":"assistant","content":"","toolCallId":null},
+  {"role":"tool","content":"结果","toolCallId":"call_abc"}
+]
+```
+
+暴露两个协议错误：
+- assistant 消息缺 `tool_calls` 数组——工具调用决策在历史里凭空消失
+- tool 消息的关联字段被序列化成驼峰 `toolCallId`，协议要求蛇形 `tool_call_id`；还多了无意义的 null 字段
+
+之所以一直没报错，是**百炼对非法消息做了容错**——换成严格校验的 OpenAI 官方接口会直接 400。「能跑」是假象。
+
+**解决**：
+1. `ChatMessage` 严格按协议建模：新增 `toolCalls`（序列化为 `tool_calls`）与 `toolCallId`（序列化为 `tool_call_id`），类级 `@JsonInclude(NON_NULL)` 去掉空字段
+2. [AgentRuntime] 存 assistant 消息时把 tool_calls 原样带上；对模型漏发 id 的情况补 id 并写回，保证 assistant.tool_calls 与 tool 消息用同一个 id（内部一致，不做跨会话/猜测式绑定）
+3. TodoTool 改结构化存储（id/content/done）+ JSON 文件持久化（临时文件+原子替换），补 complete/delete/clear
+4. Context 压缩升级：接入 LLM 摘要器（`LlmSummarizer`），失败自动回退硬截断；两种压缩都做「悬空 tool 消息」配对保护
+5. SessionManager 增加空闲会话定时清理
+6. 新增 `ChatMessageProtocolTest` 等 12 个用例，把协议字段名用断言锁死（38 个测试全过）
+
+**教训**：
+1. **对接外部协议时，数据模型要照协议建模，不能只存"自己用得上"的字段**——tool_calls 不是给本地用的，是下一轮发给 LLM 的协议要求
+2. **「能跑」可能是供应商容错兜底，不代表实现正确**；用序列化单测把请求格式锁死，才能发现这类"沉默的错误"
+3. Code Review 指出问题时，先用最小实验（jshell 序列化）证实/证伪，再动手，避免凭印象改
+
+---
+
 ## 三、AI 辅助开发的使用方式
 
 ### 1. 代码分析

@@ -69,6 +69,17 @@ public class AgentRuntime {
             String content = llmResponse.get("content") == null ? "" : (String) llmResponse.get("content");
             List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) llmResponse.get("tool_calls");
 
+            // 保证每个 tool_call 都有 id：tool 结果消息靠 tool_call_id 与之配对。
+            // 若模型漏发 id，则补一个并写回该 map，使存入 context 的 assistant.tool_calls
+            // 与后续 tool 消息使用同一个 id（内部一致，不做跨会话/猜测式绑定）。
+            if (toolCalls != null) {
+                for (Map<String, Object> tc : toolCalls) {
+                    if (tc.get("id") == null) {
+                        tc.put("id", "call-" + java.util.UUID.randomUUID());
+                    }
+                }
+            }
+
             // 提取思考过程（百炼 qwen3.8-max 思考模式开启时返回 reasoning_content 字段）
             // 思考过程仅打印 trace 供观察，不写入 context，避免上下文膨胀且不干扰后续决策
             Object reasoning = llmResponse.get("reasoning_content");
@@ -85,8 +96,9 @@ public class AgentRuntime {
                 return content;
             }
 
-            // 情况2：有工具调用，先把助手回复加入上下文
-            session.addMessage(new ChatMessage("assistant", content));
+            // 情况2：有工具调用，把助手消息（含 tool_calls）原样加入上下文。
+            // 必须保留 tool_calls，后续 tool 结果消息才能靠 tool_call_id 与之配对（OpenAI 协议要求）
+            session.addMessage(new ChatMessage("assistant", content, toolCalls));
             System.out.println("[Agent Trace] LLM 决定调用工具，数量：" + toolCalls.size());
 
             // Step3：并行执行所有工具调用，结果按原顺序收集

@@ -45,3 +45,7 @@ application-local.*
 *-local.yaml
 *-local.properties
 secrets.*
+
+### 运行期数据（待办持久化文件） ###
+/data/
+

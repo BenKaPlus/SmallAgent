@@ -4,6 +4,7 @@ import first.ChatMessage;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -58,5 +59,40 @@ class AgentSessionTest {
         }
         // 1 system + 10 user = 11，未触发截断
         assertEquals(11, session.getContext().size());
+    }
+
+    @Test
+    void hardTruncateShouldDropOrphanLeadingToolMessages() {
+        // 构造边界场景：一条带 tool_calls 的 assistant 后紧跟 19 条 tool 结果，
+        // 截断后若保留 tool 结果却丢弃了其 assistant，tool_call_id 会悬空——应把这些孤儿 tool 一并丢弃
+        AgentSession session = new AgentSession("s1");
+        Map<String, Object> function = Map.of("name", "calculator", "arguments", "{}");
+        Map<String, Object> toolCall = Map.of("id", "call-x", "type", "function", "function", function);
+        session.addMessage(new ChatMessage("assistant", "", List.of(toolCall)));
+        for (int i = 0; i < 19; i++) {
+            session.addMessage(new ChatMessage("tool", "result-" + i, "call-x"));
+        }
+
+        List<ChatMessage> ctx = session.getContext();
+        // 不允许出现没有对应 assistant 的悬空 tool 消息
+        assertTrue(ctx.stream().noneMatch(m -> "tool".equals(m.getRole())),
+                "截断后不应残留悬空的 tool 消息，实际：" + ctx);
+        assertEquals("system", ctx.get(0).getRole());
+    }
+
+    @Test
+    void shouldSummarizeOlderMessagesWhenSummarizerProvided() {
+        // 注入摘要器：较早消息应被压缩成一条摘要，最近消息原样保留
+        AgentSession session = new AgentSession("s1", older -> "FIXED_SUMMARY");
+        for (int i = 0; i < 25; i++) {
+            session.addMessage(new ChatMessage("user", "msg-" + i));
+        }
+
+        List<ChatMessage> ctx = session.getContext();
+        assertTrue(ctx.size() <= 20, "摘要后上下文应明显缩短，实际：" + ctx.size());
+        assertTrue(ctx.stream().anyMatch(m -> m.getContent() != null && m.getContent().contains("FIXED_SUMMARY")),
+                "应包含摘要消息");
+        assertEquals("msg-24", ctx.get(ctx.size() - 1).getContent(), "最近消息应原样保留");
+        assertEquals("system", ctx.get(0).getRole());
     }
 }

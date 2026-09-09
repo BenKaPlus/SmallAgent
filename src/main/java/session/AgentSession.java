@@ -7,14 +7,22 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 单个 Agent 会话，隔离不同窗口的上下文
+ * 单个 Agent 会话，隔离不同窗口的上下文。
  */
 public class AgentSession {
+    // 上下文消息数上限，超过则触发压缩
+    private static final int MAX_CONTEXT_SIZE = 20;
+    // 摘要压缩时，原样保留的最近消息条数（其余较早消息交给摘要器）
+    private static final int KEEP_RECENT = 8;
+
     private final String sessionId;
     // 上下文消息列表
     private final List<ChatMessage> context;
-    // 最大上下文消息数，超过则截断（基础压缩）
-    private static final int MAX_CONTEXT_SIZE = 20;
+    // 摘要器；为 null 时退化为硬截断（单元测试默认走这条路径）
+    private final ContextSummarizer summarizer;
+    // 最近一次活跃时间，供 SessionManager 清理空闲会话
+    private volatile long lastActiveAt;
+
     // 系统提示词
     private static final String SYSTEM_PROMPT =
             "你是一个智能助手，可以使用工具来解决问题。\n" +
@@ -23,24 +31,77 @@ public class AgentSession {
             "如果不需要工具，直接回答用户问题。";
 
     public AgentSession(String sessionId) {
+        this(sessionId, null);
+    }
+
+    public AgentSession(String sessionId, ContextSummarizer summarizer) {
         this.sessionId = sessionId;
+        this.summarizer = summarizer;
         this.context = new ArrayList<>();
         // 初始化加入系统提示
         this.context.add(new ChatMessage("system", SYSTEM_PROMPT));
+        this.lastActiveAt = System.currentTimeMillis();
     }
 
     // 添加消息到上下文
     public void addMessage(ChatMessage message) {
         context.add(message);
-        // 超过最大长度，保留系统提示 + 最近的消息
+        this.lastActiveAt = System.currentTimeMillis();
+        // 超过最大长度，触发压缩
         if (context.size() > MAX_CONTEXT_SIZE) {
-            ChatMessage system = context.get(0);
-            // 注意：subList 返回的是视图，clear 后该视图也会失效，必须先拷贝再清理
+            compact();
+        }
+    }
+
+    /**
+     * 上下文压缩：
+     * - 配置了摘要器：system + 【历史摘要】+ 最近 KEEP_RECENT 条
+     * - 未配置摘要器：硬截断，system + 最近 (MAX-1) 条
+     * 两种方式都会丢弃开头"悬空"的 tool 结果（其 assistant.tool_calls 已被移除，
+     * 若保留会导致 tool_call_id 找不到对应的 tool_calls，协议错乱）。
+     */
+    private void compact() {
+        ChatMessage system = context.get(0);
+        List<ChatMessage> compacted = new ArrayList<>();
+        compacted.add(system);
+
+        if (summarizer == null) {
+            // 硬截断：保留 system + 最近 (MAX_CONTEXT_SIZE-1) 条
             int from = context.size() - (MAX_CONTEXT_SIZE - 1);
             List<ChatMessage> recent = new ArrayList<>(context.subList(from, context.size()));
-            context.clear();
-            context.add(system);
-            context.addAll(recent);
+            dropOrphanLeadingTools(recent);
+            compacted.addAll(recent);
+        } else {
+            int recentFrom = context.size() - KEEP_RECENT;
+            // 较早的消息（system 之后、最近窗口之前）交给摘要器
+            if (recentFrom > 1) {
+                List<ChatMessage> older = new ArrayList<>(context.subList(1, recentFrom));
+                try {
+                    String summary = summarizer.summarize(older);
+                    if (summary != null && !summary.isBlank()) {
+                        compacted.add(new ChatMessage("system", "【历史对话摘要】" + summary));
+                    }
+                } catch (Exception e) {
+                    // 摘要失败时静默退化为硬截断（不插入摘要），保证主流程不受影响
+                    System.err.println("[Agent Warn] 摘要异常，退化为硬截断：" + e.getMessage());
+                }
+            }
+            List<ChatMessage> recent = new ArrayList<>(context.subList(recentFrom, context.size()));
+            dropOrphanLeadingTools(recent);
+            compacted.addAll(recent);
+        }
+
+        context.clear();
+        context.addAll(compacted);
+    }
+
+    /**
+     * 丢弃窗口开头悬空的 tool 消息：tool 消息必须紧随一条带 tool_calls 的 assistant，
+     * 若该 assistant 已在截断/摘要中被移除，这条 tool 结果就是孤儿，必须一并丢弃。
+     */
+    private void dropOrphanLeadingTools(List<ChatMessage> messages) {
+        while (!messages.isEmpty() && "tool".equals(messages.get(0).getRole())) {
+            messages.remove(0);
         }
     }
 
@@ -51,5 +112,9 @@ public class AgentSession {
 
     public String getSessionId() {
         return sessionId;
+    }
+
+    public long getLastActiveAt() {
+        return lastActiveAt;
     }
 }
